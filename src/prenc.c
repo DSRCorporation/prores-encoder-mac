@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <VideoToolbox/VTVideoEncoderList.h>
+
 
 #define BIT_PER_PIXEL 20
 
@@ -95,6 +97,27 @@ int main(int argc, char *argv[])
     int height = 1080;
     int  opt;
     int  ret;
+
+
+    CFArrayRef list;
+    CFDictionaryRef dict;
+    VTCopyVideoEncoderList(NULL, &list);
+    CFIndex c = CFArrayGetCount(list);
+    for (int i = 0; i < c; i++)
+    {
+        char str[1024];
+
+        dict = CFArrayGetValueAtIndex(list, i);
+
+        CFStringRef encoder_name = CFDictionaryGetValue(dict, kVTVideoEncoderList_EncoderName);
+        CFStringGetCString(encoder_name, str, 1024, kCFStringEncodingUTF8);
+        printf("encoder name: %s\n", str);
+    }
+
+
+
+
+    return EXIT_SUCCESS;
 
     while ((opt = getopt(argc, argv, "i:o:s:?h")) != -1) {
         switch (opt) 

@@ -17,7 +17,7 @@ BIN := prenc
 all: $(BIN)
 
 $(BIN): $(OBJS)
-	$(CC) -Wall -g $< -o $@
+	$(CC) -Wall -g $< -o $@ -framework VideoToolbox -framework CoreFoundation
 
 clean:
 	rm -f *.o $(BIN)
