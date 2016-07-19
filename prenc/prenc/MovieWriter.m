@@ -40,7 +40,7 @@
     {
         if (error.code != NSFileNoSuchFileError)
         {
-            NSLog(@"%@", error);
+            fprintf(stderr, "Output file already exist and cannot be removed(%ld).\n", (long)error.code);
             return nil;
         }
     }
@@ -48,14 +48,14 @@
     self.assetInput = [AVAssetWriterInput assetWriterInputWithMediaType:AVMediaTypeVideo outputSettings:nil];
     if (self.assetInput == nil)
     {
-        NSLog(@"Cannot create asset input.");
+        fprintf(stderr, "Cannot create asset input.\n");
         return nil;
     }
     
     self.assetWriter = [AVAssetWriter assetWriterWithURL:url fileType:AVFileTypeQuickTimeMovie error:&error];
     if (self.assetWriter == nil)
     {
-        NSLog(@"Cannot create asset writer.");
+        fprintf(stderr, "Cannot create asset writer.\n");
         return nil;
     }
     
@@ -63,7 +63,7 @@
     
     if (![self.assetWriter startWriting])
     {
-        NSLog(@"Cannot start writing.");
+        fprintf(stderr, "Cannot start writing.\n");
         return nil;
     }
     

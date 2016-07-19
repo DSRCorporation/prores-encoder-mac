@@ -9,194 +9,339 @@
 
 
 #import <VideoToolbox/VTCompressionSession.h>
+#import <pthread.h>
 
 @interface ProresEncoder ()
 
-@property (nonatomic)         VTCompressionSessionRef              compSess;
-@property (nonatomic)         CMSampleBufferRef                    sampleBuffer;
+@property (nonatomic)         VTCompressionSessionRef   compSess;
 
-@property (nonatomic)         int                                  width;
-@property (nonatomic)         int                                  height;
-@property (nonatomic)         int                                  lineSize;
+@property (nonatomic)         CFMutableArrayRef         encodedQueue;
 
-@property (nonatomic)         CMTimeScale                          num;
-@property (nonatomic)         CMTimeScale                          den;
+@property (nonatomic)         int                       width;
+@property (nonatomic)         int                       height;
 
-@property (nonatomic)         uint64_t                             frameNumber;
+@property (nonatomic)         CMTimeScale               tsNum;
+@property (nonatomic)         CMTimeScale               tsDen;
 
-@property                     BOOL                                 isEncodingFinished;
-@property                     int                                  encodingError;
+@property (nonatomic)         uint64_t                  frameNumber;
+
+@property (nonatomic)         pthread_mutex_t           *queueMutex;
+
 
 @end
 
 
 @implementation ProresEncoder
 
-static void frame_encoded_cb(void *outputCallbackRefCon,
-                             void *sourceFrameRefCon, OSStatus status, VTEncodeInfoFlags infoFlags, CMSampleBufferRef sampleBuffer)
+static void pixelBufferReleaseCb(void *releaseRefCon, const void *baseAddress)
 {
+    free(releaseRefCon);
+}
+
+static void frameEncodedCb(
+                           void *outputCallbackRefCon,
+                           void *sourceFrameRefCon,
+                           OSStatus status,
+                           VTEncodeInfoFlags infoFlags,
+                           CMSampleBufferRef sampleBuffer)
+{
+    CMSampleBufferRef encodedSampleBuffer = NULL;
     ProresEncoder *encoder = (__bridge ProresEncoder *)outputCallbackRefCon;
-    CMSampleBufferRef outSampleBuffer = NULL;
-    int ret;
-    
-    encoder.encodingError = 0;
-    
-    if (sampleBuffer == NULL)
+
+    if (status != noErr || sampleBuffer == NULL)
+        return;
+
+    if (CMSampleBufferCreateCopy(kCFAllocatorDefault, sampleBuffer, &encodedSampleBuffer))
     {
-        encoder.encodingError = 1;
+        fprintf(stderr, "Cannot create encoded sample buffer.\n");
         return;
     }
-    
-    if ((ret = CMSampleBufferCreateCopy(kCFAllocatorDefault, sampleBuffer, &outSampleBuffer)))
+
+    pthread_mutex_lock(encoder.queueMutex);
     {
-        encoder.encodingError = 2;
-        NSLog(@"Copy of sample buffer failed(%d).", ret);
-        return;
+        CFArrayAppendValue(encoder.encodedQueue, encodedSampleBuffer);
     }
-    
-    encoder.sampleBuffer = outSampleBuffer;
-    encoder.isEncodingFinished = YES;
+    pthread_mutex_unlock(encoder.queueMutex);
 }
 
 - (id)init
 {
-    return [self initWithWidth:1920 height:1080 numerator:30 denumerator:1];
+    return [self initWithWidth:1920
+                        height:1080
+                         tsNum:1
+                         tsDen:30
+                        darNum:16
+                        darDen:9
+                     interlace:NO
+           enableHwAccelerated:YES];
 }
 
 - (id)initWithWidth:(int)width
              height:(int)height
-          numerator:(uint32_t)num
-        denumerator:(uint32_t)den
+              tsNum:(uint32_t)tsNum
+              tsDen:(uint32_t)tsDen
+             darNum:(uint32_t)darNum
+             darDen:(uint32_t)darDen
+          interlace:(BOOL)interlace
+enableHwAccelerated:(BOOL)enableHwAccelerated
 {
     int ret = 0;
-    
+    CFMutableDictionaryRef encoderSpecification = NULL;
+
     if ((self = [super init]) == nil)
         return nil;
-    
+
     self.frameNumber = 0;
     self.width = width;
     self.height = height;
-    self.lineSize = self.width * BIT_PER_PIXEL / 8;
-    
-    self.num = num;
-    self.den = den;
-    
-    self.sampleBuffer = NULL;
-    
+
+    self.tsNum = tsNum;
+    self.tsDen = tsDen;
+
+    self.encodedQueue = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+
+    _queueMutex = malloc(sizeof(pthread_mutex_t));
+    if (pthread_mutex_init(_queueMutex, NULL))
+    {
+        fprintf(stderr, "Cannot create queue mutex.\n");
+        return nil;
+    }
+
     // create compression (encoding) session
+    if (enableHwAccelerated)
+    {
+        encoderSpecification = CFDictionaryCreateMutable(
+                                                         kCFAllocatorDefault,
+                                                         1,
+                                                         &kCFCopyStringDictionaryKeyCallBacks,
+                                                         &kCFTypeDictionaryValueCallBacks);
+        if (encoderSpecification)
+            CFDictionarySetValue(
+                                 encoderSpecification,
+                                 kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
+                                 kCFBooleanTrue);
+        else
+            fprintf(stderr, "Hardware acceleration property cannot be created.\n");
+    }
+
     ret = VTCompressionSessionCreate(
                                      NULL,                               /* allocator                   */
                                      self.width,                         /* width                       */
                                      self.height,                        /* height                      */
                                      kCMVideoCodecType_AppleProRes422HQ, /* codecType                   */
-                                     NULL,                               /* encoderSpecification        */
+                                     encoderSpecification,               /* encoderSpecification        */
                                      NULL,                               /* sourceImageBufferAttributes */
                                      NULL,                               /* compressedDataAllocator     */
-                                     frame_encoded_cb,                   /* outputCallback              */
+                                     frameEncodedCb,                     /* outputCallback              */
                                      (__bridge void *)self,              /* outputCallbackRefCon        */
                                      &_compSess);                        /* compressionSessionOut       */
     if (ret)
     {
-        NSLog(@"ProRes encoder cannot be created. Internal error %d.", ret);
+        fprintf(stderr, "ProRes encoder cannot be created. Internal error %d.\n", ret);
         return nil;
+    }
+    if (VTSessionSetProperty(_compSess, kVTCompressionPropertyKey_RealTime, kCFBooleanFalse))
+        fprintf(stderr, "Encoder real-time mode cannot be disabled.\n");
+
+
+    // set pixel aspect ratio
+    ret = [self setPixelAspectRatioWithFrameWidth:self.width
+                                      frameHeight:self.height
+                                           darNum:darNum
+                                           darDen:darDen];
+    if (ret)
+        fprintf(stderr, "Aspect ratio property (%d:%d) cannot be set (%d).\n", darNum, darDen, ret);
+
+    // set interlace mode if necessary
+    if (interlace)
+    {
+        ret = [self setInterlaceMode];
+        if (ret)
+            fprintf(stderr, "Cannot set interlace video property (%d).\n", ret);
     }
 
     return self;
 }
 
-- (void)setSampleBuffer:(CMSampleBufferRef)sampleBuffer
-{
-    _sampleBuffer = sampleBuffer;
-}
-
-- (BOOL)encodeWithRawImage:(uint8_t *)rawimg sampleBuffer:(CMSampleBufferRef *)sampleBuffer
+- (BOOL)encodeWithRawImage:(uint8_t *)rawimg
 {
     int ret = 0;
     CVPixelBufferRef pixBuf = NULL;
-    CMTime pts = CMTimeMake(self.frameNumber * self.den, self.num);
-#if 0
-    //uint64_t rawimgSize = self.width * self.height * 4;
-    size_t planeWidth[]        = { self.width, self.width / 2, self.width / 2 };
-    size_t planeHeight[]       = { self.height, self.height, self.height };
-    size_t planeBytesPerRow[]  = { self.width, self.width, self.width };
-    void   *planeBaseAddress[] = { rawimg, rawimg + self.height * self.width, rawimg + self.height * (self.width + self.width / 2) };
-#else
-    size_t planeWidth[]        = { self.width, self.width / 2, self.width / 2 };
-    size_t planeHeight[]       = { self.height, self.height / 2, self.height / 2 };
-    size_t planeBytesPerRow[]  = { self.width, self.width / 2, self.width / 2 };
-    void   *planeBaseAddress[] = { rawimg, rawimg + self.height * self.width, rawimg + self.height * (self.width + self.width / 4) };
-#endif
-    CVPlanarPixelBufferInfo_YCbCrPlanar *descriptor = malloc(sizeof(CVPlanarPixelBufferInfo_YCbCrPlanar));
-    memset(descriptor, 0, sizeof(CVPlanarPixelBufferInfo_YCbCrPlanar));
-    
-#if 1
-    self.lineSize = self.width * 4;
+    CMTime pts = CMTimeMake(self.frameNumber * self.tsNum, self.tsDen);
+
     ret = CVPixelBufferCreateWithBytes(
                                        NULL,
                                        self.width,
                                        self.height,
                                        kCVPixelFormatType_422YpCbCr16,
                                        rawimg,
-                                       self.lineSize,
-                                       NULL,
-                                       NULL,
+                                       self.width * 4,
+                                       pixelBufferReleaseCb,
+                                       rawimg,
                                        NULL,
                                        &pixBuf);
-#else
-    ret = CVPixelBufferCreateWithPlanarBytes(
-                                             NULL,
-                                             self.width,
-                                             self.height,
-                                             //kCVPixelFormatType_422YpCbCr10,
-                                             //kCVPixelFormatType_420YpCbCr8Planar,
-                                             kCVPixelFormatType_422YpCbCr8,
-                                             &descriptor,
-                                             //rawimgSize,
-                                             0,
-                                             3,
-                                             planeBaseAddress,
-                                             planeWidth,
-                                             planeHeight,
-                                             planeBytesPerRow,
-                                             NULL,
-                                             NULL,
-                                             NULL,
-                                             &pixBuf);
-#endif
     if (ret)
         goto done;
-    
+
     ret = VTCompressionSessionEncodeFrame(_compSess, pixBuf, pts, kCMTimeInvalid, NULL, NULL, NULL);
     if (ret)
         goto done;
-    
-    while (!self.isEncodingFinished && self.encodingError == 0)
-        usleep(1000);
-    
-    self.isEncodingFinished = NO;
-    
-    if (self.encodingError)
-    {
-        ret = self.encodingError;
-        goto done;
-    }
-    
+
     self.frameNumber++;
-    *sampleBuffer = self.sampleBuffer;
-    
+
 done:
-    if (descriptor)
-        free(descriptor);
     if (pixBuf)
         CFRelease(pixBuf);
-    
+
     return (BOOL)!ret;
+}
+
+- (BOOL)hasEncodedFrame
+{
+    BOOL ret;
+    pthread_mutex_lock(self.queueMutex);
+    {
+        ret = CFArrayGetCount(self.encodedQueue) > 0;
+    }
+    pthread_mutex_unlock(self.queueMutex);
+
+    return ret;
+}
+
+- (CMSampleBufferRef)nextEncodedFrame
+{
+    if ([self hasEncodedFrame])
+    {
+        CMSampleBufferRef sampleBuffer;
+
+        pthread_mutex_lock(self.queueMutex);
+        {
+            sampleBuffer = (CMSampleBufferRef)CFArrayGetValueAtIndex(self.encodedQueue, 0);
+            CFArrayRemoveValueAtIndex(self.encodedQueue, 0);
+        }
+        pthread_mutex_unlock(self.queueMutex);
+
+        return sampleBuffer;
+    }
+    else
+        return NULL;
+}
+
+- (BOOL)flushFrames
+{
+    return (BOOL)!VTCompressionSessionCompleteFrames(_compSess, kCMTimeIndefinite);
 }
 
 - (void)dealloc
 {
-    VTCompressionSessionInvalidate(_compSess);
-    CFRelease(_compSess);
+    if (_compSess)
+    {
+        VTCompressionSessionInvalidate(_compSess);
+        CFRelease(_compSess);
+    }
+
+    if (_queueMutex)
+    {
+        pthread_mutex_destroy(_queueMutex);
+        free(_queueMutex);
+    }
+
+    if (_encodedQueue)
+    {
+        CMSampleBufferRef buf;
+        while ((buf = [self nextEncodedFrame]))
+            CFRelease(buf);
+
+        CFRelease(_encodedQueue);
+    }
+
+}
+
+- (OSStatus)setPixelAspectRatioWithFrameWidth:(int)frameWidth
+                                  frameHeight:(int)frameHeight
+                                       darNum:(int)darNum
+                                       darDen:(int)darDen
+{
+    OSStatus ret = noErr;
+    int numValue = darNum * frameHeight;
+    int denValue = darDen * frameWidth;
+
+    if (darNum <= 0 || darDen <= 0)
+        return ret;
+
+    if (numValue % denValue == 0 && numValue / denValue == 1)
+        return ret;
+
+    CFNumberRef parNum = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &numValue);
+    CFNumberRef parDen = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &denValue);
+
+
+    CFMutableDictionaryRef par = CFDictionaryCreateMutable(
+                                                           kCFAllocatorDefault,
+                                                           2,
+                                                           &kCFCopyStringDictionaryKeyCallBacks,
+                                                           &kCFTypeDictionaryValueCallBacks);
+    if (parNum == NULL || parDen == NULL || par == NULL)
+    {
+        ret = -1;
+        goto done;
+    }
+
+    CFDictionarySetValue(
+                         par,
+                         kCMFormatDescriptionKey_PixelAspectRatioHorizontalSpacing,
+                         parNum);
+
+    CFDictionarySetValue(
+                         par,
+                         kCMFormatDescriptionKey_PixelAspectRatioVerticalSpacing,
+                         parDen);
+
+    ret = VTSessionSetProperty(
+                               _compSess,
+                               kVTCompressionPropertyKey_PixelAspectRatio,
+                               par);
+
+done:
+    if (parNum)
+        CFRelease(parNum);
+    if (parDen)
+        CFRelease(parDen);
+    if (par)
+        CFRelease(par);
+
+    return ret;
+}
+
+- (OSStatus)setInterlaceMode
+{
+    OSStatus ret;
+    int fieldValue = 2;
+    CFNumberRef fieldCount = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &fieldValue);
+
+    if (fieldCount == NULL)
+    {
+        ret = -1;
+        goto done;
+    }
+
+    ret = VTSessionSetProperty(
+                               _compSess,
+                               kVTCompressionPropertyKey_FieldCount,
+                               fieldCount);
+    if (ret)
+        goto done;
+
+    ret = VTSessionSetProperty(
+                               _compSess,
+                               kVTCompressionPropertyKey_FieldDetail,
+                               kCMFormatDescriptionFieldDetail_TemporalTopFirst);
+
+done:
+    if (fieldCount)
+        CFRelease(fieldCount);
+
+    return ret;
 }
 
 @end

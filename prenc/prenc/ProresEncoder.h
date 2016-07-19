@@ -11,20 +11,26 @@
 
 #import <Foundation/Foundation.h>
 #import <CoreMedia/CoreMedia.h>
-
-
-//#define BIT_PER_PIXEL 20
-#define BIT_PER_PIXEL 32
+#import <VideoToolbox/VTCompressionSession.h>
 
 
 @interface ProresEncoder : NSObject
 
 - (id)initWithWidth:(int)width
              height:(int)height
-          numerator:(uint32_t)num
-        denumerator:(uint32_t)den;
+              tsNum:(uint32_t)tsNum
+              tsDen:(uint32_t)tsDen
+             darNum:(uint32_t)darNum
+             darDen:(uint32_t)darDen
+          interlace:(BOOL)interlace
+enableHwAccelerated:(BOOL)enableHwAccelerated;
 
-- (BOOL)encodeWithRawImage:(uint8_t *)rawimg sampleBuffer:(CMSampleBufferRef *)sampleBuffer;
+- (BOOL)encodeWithRawImage:(uint8_t *)rawimg;
+
+- (CMSampleBufferRef)nextEncodedFrame;
+
+- (BOOL)flushFrames;
+
 @end
 
 
