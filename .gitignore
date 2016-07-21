@@ -1,2 +1,5 @@
 **/*.o
-prenc
+xcuserdata/
+.DS_Store
+tags
+build/
