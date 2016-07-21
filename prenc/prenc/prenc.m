@@ -10,7 +10,13 @@
 #import "MovieWriter.h"
 
 
-static void print_usage(char *programName)
+#define FORMAT_SCALE_STR     "scale="
+#define FORMAT_DAR_STR       "setdar="
+#define FORMAT_FPS_STR       "fps="
+#define FORMAT_INTERLACE_STR "interlace"
+
+
+static void printUsage(char *programName)
 {
     char *name = basename(programName);
 
@@ -32,40 +38,52 @@ static void print_usage(char *programName)
     printf("  interlace               ""Sets interlaced video, default progressive.\n");
 }
 
-static void getFrameSize(const char *formatStr, int *width, int *height)
+static void getTwoParameters(const char *formatStr, const char *pattern, char delimeter, int *firstPar, int *secondPar)
 {
-    int  w = 0;
-    int  h = 0;
+    int  f = 0;
+    int  s = 0;
     char tmp[256] = { 0 };
-    char *x;
-    long  ws;
-    char *scale = strstr(formatStr, "scale=");
+    char *delim;
+    char *comma;
+    long fs;
+    long ss;
+    char *format = strstr(formatStr, pattern);
 
-    x = strchr(formatStr, 'x');
-    ws = x - formatStr;
-
-    if (x == NULL || ws == 0 || ws > 255)
+    if (format == NULL)
         return;
 
-    memcpy(tmp, formatStr, ws);
-    w = atoi(tmp);
+    format += strlen(pattern);
+    delim = strchr(format, delimeter);
+    fs    = delim - format;
 
-    h = atoi(x + 1);
-}
+    if (delim == NULL || fs == 0 || fs > 255)
+        return;
 
-static void getTimeScale(const char *formatStr, int *tsNum, int *tsDen)
-{
+    memcpy(tmp, format, fs);
+    f = atoi(tmp);
+    if (f <= 0)
+        return;
 
-}
+    format += fs + 1;
+    comma = strchr(format, ',');
+    ss = (comma) ? comma - format : strlen(format);
+    if (ss == 0 || ss > 255)
+        return;
 
-static void getDisplayAspectRatio(const char *formatStr, int *darNum, int *darDen)
-{
+    memset(tmp, 0, sizeof(tmp));
+    memcpy(tmp, format, ss);
+    s = atoi(tmp);
+    if (s == 0)
+        return;
 
+    *firstPar  = f;
+    *secondPar = s;
 }
 
 static void getInterlacing(const char *formatStr, BOOL *interlace)
 {
-
+    if (strstr(formatStr, FORMAT_INTERLACE_STR))
+        *interlace = YES;
 }
 
 static void parseFormat(const char *formatStr,
@@ -77,9 +95,9 @@ static void parseFormat(const char *formatStr,
                         int *darDen,
                         BOOL *interlace)
 {
-    getFrameSize(formatStr, width, height);
-    getTimeScale(formatStr, tsNum, tsDen);
-    getDisplayAspectRatio(formatStr, darNum, darDen);
+    getTwoParameters(formatStr, FORMAT_SCALE_STR, ':', width, height);
+    getTwoParameters(formatStr, FORMAT_FPS_STR, '/', tsDen, tsNum);
+    getTwoParameters(formatStr, FORMAT_DAR_STR, '/', darNum, darDen);
     getInterlacing(formatStr, interlace);
 }
 
@@ -184,11 +202,16 @@ int main(int argc, char *argv[])
 
             case 'f':
                 parseFormat(optarg, &width, &height, &tsNum, &tsDen, &darNum, &darDen, &interlace);
-                printf("Video settings: %dx%d\n", width, height);
+                if (darNum)
+                    printf("Video settings: %dx%d %d/%d %d/%d %s\n",
+                        width, height, tsDen, tsNum, darNum, darDen, (interlace) ? "interlaced" : "progressive");
+                else
+                    printf("Video settings: %dx%d %d/%d %s\n",
+                        width, height, tsDen, tsNum, (interlace) ? "interlaced" : "progressive");
             break;
 
             case 'h':
-                print_usage(argv[0]);
+                printUsage(argv[0]);
                 return EXIT_SUCCESS;
             break;
 
