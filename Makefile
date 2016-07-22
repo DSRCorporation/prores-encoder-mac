@@ -1,7 +1,6 @@
 OS_NAME = $(shell uname -s)
 ifneq ($(OS_NAME),Darwin)
-	echo "Currently only OS X supported."
-	exit -1
+$(error Currently only OS X supported)
 endif
 
 CC = clang
