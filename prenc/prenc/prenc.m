@@ -1,3 +1,24 @@
+// Copyright (C) 2016 Netflix, Inc.
+//
+//     This file is part of OS X ProRes encoder.
+//
+//     OS X ProRes encoder is free software: you can redistribute it and/or modify
+//     it under the terms of the GNU General Public License as published by
+//     the Free Software Foundation, either version 3 of the License, or
+//     (at your option) any later version.
+//
+//     OS X ProRes encoder is distributed in the hope that it will be useful,
+//     but WITHOUT ANY WARRANTY; without even the implied warranty of
+//     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//     GNU General Public License for more details.
+//
+//     You should have received a copy of the GNU General Public License
+//     along with OS X ProRes encoder.  If not, see <http://www.gnu.org/licenses/>.
+//
+//  prenc.m
+//  prenc
+//
+
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -15,7 +36,11 @@
 #define FORMAT_FPS_STR       "fps="
 #define FORMAT_INTERLACE_STR "interlace"
 
-
+/**
+ * Prints usage of application.
+ *
+ * @param programName program name
+ */
 static void printUsage(char *programName)
 {
     char *name = basename(programName);
@@ -38,7 +63,16 @@ static void printUsage(char *programName)
     printf("  interlace               ""Sets interlaced video, default progressive.\n");
 }
 
-static void getTwoParameters(const char *formatStr, const char *pattern, char delimeter, int *firstPar, int *secondPar)
+/**
+ * Parses format string and gets two parameters.
+ *
+ * @param formatStr format string
+ * @param pattern pattern string to find
+ * @param delimiter parameters delimiter
+ * @param firstPar first parameter to set
+ * @param secondPar second parameter to set
+ */
+static void getTwoParameters(const char *formatStr, const char *pattern, char delimiter, int *firstPar, int *secondPar)
 {
     int  f = 0;
     int  s = 0;
@@ -53,7 +87,7 @@ static void getTwoParameters(const char *formatStr, const char *pattern, char de
         return;
 
     format += strlen(pattern);
-    delim = strchr(format, delimeter);
+    delim = strchr(format, delimiter);
     fs    = delim - format;
 
     if (delim == NULL || fs == 0 || fs > 255)
@@ -80,12 +114,30 @@ static void getTwoParameters(const char *formatStr, const char *pattern, char de
     *secondPar = s;
 }
 
+/**
+ * Gets interlace parameter.
+ *
+ * @param formatStr format string
+ * @param interlace interlace parameter to set
+ */
 static void getInterlacing(const char *formatStr, BOOL *interlace)
 {
     if (strstr(formatStr, FORMAT_INTERLACE_STR))
         *interlace = YES;
 }
 
+/**
+ * Parses format option value.
+ *
+ * @param formatStr format option value
+ * @param width frame width to set
+ * @param height frame height to set
+ * @param tsNum timescale numerator to set
+ * @param tsDen timescale denumerator to set
+ * @param darNum display aspect ratio numerator to set
+ * @param darDen display aspect ratio denumerator to set
+ * @param interlace interlace flag to set
+ */
 static void parseFormat(const char *formatStr,
                         int *width,
                         int *height,
@@ -101,6 +153,15 @@ static void parseFormat(const char *formatStr,
     getInterlacing(formatStr, interlace);
 }
 
+/**
+ * Reads raw image data from input file.
+ *
+ * @param in intput file or stdin
+ * @param rawimg raw image data pointer
+ * @param rawimgSize raw image data size to read
+ *
+ * @return 0 on success, -1 on end of file and -2 on file errors
+ */
 static int readRawimage(FILE *in, uint8_t *rawimg, uint64_t rawimgSize)
 {
     uint8_t *p = rawimg;
@@ -124,6 +185,14 @@ static int readRawimage(FILE *in, uint8_t *rawimg, uint64_t rawimgSize)
     return 0;
 }
 
+/**
+ * Converts planar YUV 4:2:2 16-bit to packed format.
+ *
+ * @param planar planar data pointer
+ * @param width frame width
+ * @param height frame height
+ * @param packed converted output data pointer
+ */
 static void pack422YpCbCr16PlanarTo422YpCbCr16(uint8_t *planar, int width, int height, uint8_t *packed)
 {
     int rowSize = width * 2;
@@ -145,6 +214,12 @@ static void pack422YpCbCr16PlanarTo422YpCbCr16(uint8_t *planar, int width, int h
     }
 }
 
+/**
+ * Writes frames from encoder internal queue to file.
+ *
+ * @param encoder ProresEncoder instance
+ * @param writer MovieWriter instance
+ */
 static void writeEncodedFrames(ProresEncoder *encoder, MovieWriter *writer)
 {
     CMSampleBufferRef sampleBuffer = NULL;
@@ -243,7 +318,7 @@ int main(int argc, char *argv[])
     if (encoder == nil)
         return EXIT_FAILURE;
 
-    rawimgSize = height * width * 4; // 422 16bit
+    rawimgSize = height * width * 4; // 4:2:2 16bit -> (width * 2 + width + width) * height
     rawimg = malloc(rawimgSize);
     if (rawimg == NULL)
     {
@@ -255,7 +330,7 @@ int main(int argc, char *argv[])
 
     while ((ret = readRawimage(in, rawimg, rawimgSize)) == 0)
     {
-        // packedYUV should not be relesed manualy and will be managed by encoder
+        // packedYUV should not be released manually and will be managed by encoder
         uint8_t *packedYUV = malloc(rawimgSize);
         if (packedYUV == NULL)
         {
