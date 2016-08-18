@@ -1,0 +1,5 @@
+**/*.o
+xcuserdata/
+.DS_Store
+tags
+build/
