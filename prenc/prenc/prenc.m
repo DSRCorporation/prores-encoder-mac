@@ -303,7 +303,7 @@ int main(int argc, char *argv[])
 
     outFileName = argv[optind];
 
-    movieWriter = [[MovieWriter alloc] initWithOutFile:[NSString stringWithUTF8String:outFileName]];
+    movieWriter = [[MovieWriter alloc] initWithOutFile:[NSString stringWithUTF8String:outFileName] timescale:tsDen];
     if (movieWriter == nil)
         return EXIT_FAILURE;
 

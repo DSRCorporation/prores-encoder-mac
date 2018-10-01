@@ -36,7 +36,7 @@
  * @param outFileName output file name
  * @return instance of MovieWriter, nil otherwise
  */
-- (id)initWithOutFile:(NSString *)outFileName;
+- (id)initWithOutFile:(NSString *)outFileName timescale:(CMTimeScale)ts;
 
 /**
  * Writes CMSampleBuffer with encoded data to QuickTime Movie file.

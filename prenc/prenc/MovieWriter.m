@@ -28,6 +28,7 @@
 
 @property (strong, nonatomic) AVAssetWriter      *assetWriter;
 @property (strong, nonatomic) AVAssetWriterInput *assetInput;
+@property (assign, nonatomic) CMTimeScale timescale;
 
 @end
 
@@ -36,17 +37,19 @@
 
 - (id)init
 {
-    return [self initWithOutFile:@"output.mov"];
+    return [self initWithOutFile:@"output.mov" timescale:600];
 }
 
-- (id)initWithOutFile:(NSString *)outFileName
+- (id)initWithOutFile:(NSString *)outFileName timescale:(CMTimeScale)ts
 {
     NSURL   *url = nil;
     NSError *error;
 
     if ((self = [super init]) == nil)
         return nil;
-
+    
+    self.timescale = ts;
+    
     url = [[NSURL alloc] initFileURLWithPath:outFileName];
     // remove if file already exists
     if (![[NSFileManager defaultManager] removeItemAtPath:[url path] error:&error])
@@ -72,6 +75,9 @@
         return nil;
     }
 
+    self.assetWriter.movieTimeScale = self.timescale;
+    self.assetInput.mediaTimeScale = self.timescale;
+    
     [self.assetWriter addInput:self.assetInput];
 
     if (![self.assetWriter startWriting])
